@@ -24,6 +24,10 @@
 #include "gloo/transport/uv/device.h"
 #endif
 
+#ifdef GLOO_MPI_BENCH_HAVE_MYELON
+#include "gloo/transport/myelon/device.h"
+#endif
+
 namespace gloo {
 namespace mpi_bench {
 namespace {
@@ -31,7 +35,7 @@ namespace {
 [[noreturn]] void failUsage(const char* benchName, const std::string& message) {
   std::ostringstream oss;
   oss << "Usage: " << benchName
-      << " [--transport=auto|tcp|uv] [--iface=IFACE] [--warmup=N] "
+      << " [--transport=auto|tcp|uv|myelon] [--iface=IFACE] [--warmup=N] "
          "[--iterations=N] [--root=R] [--sizes=4,64,1KiB,...] "
          "[--min-bytes=N] [--max-bytes=N] [--factor=N] [--no-verify]\n"
       << "Example: " << benchName
@@ -126,6 +130,13 @@ std::vector<size_t> buildSizeSweep(const BenchOptions& options) {
 }
 
 std::shared_ptr<transport::Device> createDevice(const BenchOptions& options) {
+#ifdef GLOO_MPI_BENCH_HAVE_MYELON
+  if (options.transport == "myelon") {
+    transport::myelon::attr attr;
+    return transport::myelon::CreateDevice(attr);
+  }
+#endif
+
 #if GLOO_HAVE_TRANSPORT_TCP
   if (options.transport == "auto" || options.transport == "tcp") {
     transport::tcp::attr attr;
@@ -237,8 +248,12 @@ BenchOptions parseBenchOptions(int argc, char** argv, const char* benchName) {
     failUsage(benchName, "root must be >= 0");
   }
   if (options.transport != "auto" && options.transport != "tcp" &&
-      options.transport != "uv") {
-    failUsage(benchName, "transport must be auto, tcp, or uv");
+      options.transport != "uv"
+#ifdef GLOO_MPI_BENCH_HAVE_MYELON
+      && options.transport != "myelon"
+#endif
+      ) {
+    failUsage(benchName, "transport must be auto, tcp, uv, or myelon");
   }
 
   try {

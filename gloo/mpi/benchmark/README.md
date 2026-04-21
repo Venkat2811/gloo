@@ -70,3 +70,38 @@ class closely enough for useful prototype numbers.
 The Gloo-side benchmark no longer calls that C ABI directly. The current integration
 goes through a thin C++ shim in `gloo/transport/myelon/binding.{h,cc}` so later
 transport work can reuse the same RAII/error-translation layer.
+
+## Generic Myelon transport probe
+
+There is now also a minimal local-only `gloo/transport/myelon` backend that is compiled
+into the MPI benchmark binaries when `myelon-playground` is available.
+
+This backend currently targets the unbound-buffer path only and is intentionally narrow:
+
+- same-host peers only
+- lazy producer and consumer creation per payload bucket
+- generic `mpi_bench_pingpong --transport=myelon` works
+- generic `mpi_bench_broadcast --transport=myelon` works
+- `mpi_bench_allreduce --transport=myelon` is not correct yet
+
+Example commands:
+
+```bash
+mpirun -n 2 ./build-mpi-uv/gloo/mpi/benchmark/mpi_bench_pingpong \
+  --transport=myelon \
+  --sizes=4,64,1KiB,16KiB,256KiB,1MiB \
+  --warmup=20 \
+  --iterations=100
+
+mpirun -n 4 ./build-mpi-uv/gloo/mpi/benchmark/mpi_bench_broadcast \
+  --transport=myelon \
+  --sizes=4,1KiB,256KiB \
+  --warmup=10 \
+  --iterations=50
+```
+
+The current allreduce failure is expected from the backend's remaining limitations:
+
+- no bound-buffer implementation
+- no tag-aware multiplexing
+- no correctness proof yet for pipelined multi-recv ring traffic

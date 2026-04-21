@@ -4,6 +4,11 @@ set(GLOO_MPI_BENCH_COMMON_SRCS
 
 set(GLOO_MYELON_SHIM_SRCS
   "${CMAKE_CURRENT_SOURCE_DIR}/../../transport/myelon/binding.cc"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../transport/myelon/address.cc"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../transport/myelon/context.cc"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../transport/myelon/device.cc"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../transport/myelon/pair.cc"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../transport/myelon/unbound_buffer.cc"
   )
 
 set(
@@ -39,6 +44,7 @@ if(
   AND EXISTS "${MYELON_GLOO_FFI_INCLUDE_DIR}/myelon_gloo_ffi.h"
   )
   find_program(CARGO_EXECUTABLE cargo REQUIRED)
+  add_compile_definitions(GLOO_MPI_BENCH_HAVE_MYELON=1)
 
   add_custom_command(
     OUTPUT "${MYELON_GLOO_FFI_LIB}"
@@ -65,6 +71,37 @@ if(
     )
   target_link_libraries(mpi_bench_myelon_pingpong gloo "${MYELON_GLOO_FFI_LIB}")
   add_dependencies(mpi_bench_myelon_pingpong myelon_gloo_ffi_build)
+
+  target_sources(mpi_bench_allreduce PRIVATE ${GLOO_MYELON_SHIM_SRCS})
+  target_sources(mpi_bench_broadcast PRIVATE ${GLOO_MYELON_SHIM_SRCS})
+  target_sources(mpi_bench_pingpong PRIVATE ${GLOO_MYELON_SHIM_SRCS})
+
+  target_include_directories(
+    mpi_bench_allreduce
+    PRIVATE
+    "${PROJECT_SOURCE_DIR}"
+    "${MYELON_GLOO_FFI_INCLUDE_DIR}"
+    )
+  target_include_directories(
+    mpi_bench_broadcast
+    PRIVATE
+    "${PROJECT_SOURCE_DIR}"
+    "${MYELON_GLOO_FFI_INCLUDE_DIR}"
+    )
+  target_include_directories(
+    mpi_bench_pingpong
+    PRIVATE
+    "${PROJECT_SOURCE_DIR}"
+    "${MYELON_GLOO_FFI_INCLUDE_DIR}"
+    )
+
+  target_link_libraries(mpi_bench_allreduce "${MYELON_GLOO_FFI_LIB}")
+  target_link_libraries(mpi_bench_broadcast "${MYELON_GLOO_FFI_LIB}")
+  target_link_libraries(mpi_bench_pingpong "${MYELON_GLOO_FFI_LIB}")
+
+  add_dependencies(mpi_bench_allreduce myelon_gloo_ffi_build)
+  add_dependencies(mpi_bench_broadcast myelon_gloo_ffi_build)
+  add_dependencies(mpi_bench_pingpong myelon_gloo_ffi_build)
 else()
   message(
     STATUS
