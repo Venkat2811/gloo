@@ -66,3 +66,7 @@ That bucketed payload API matters. A fixed 1 MiB slot for every message made sma
 message latency unrepresentative. The current binding chooses from `64 B`, `1 KiB`,
 `4 KiB`, `64 KiB`, `256 KiB`, and `1 MiB` slots so the stride matches the payload
 class closely enough for useful prototype numbers.
+
+The Gloo-side benchmark no longer calls that C ABI directly. The current integration
+goes through a thin C++ shim in `gloo/transport/myelon/binding.{h,cc}` so later
+transport work can reuse the same RAII/error-translation layer.

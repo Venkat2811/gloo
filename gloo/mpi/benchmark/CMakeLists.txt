@@ -2,6 +2,10 @@ set(GLOO_MPI_BENCH_COMMON_SRCS
   "${CMAKE_CURRENT_SOURCE_DIR}/common.cc"
   )
 
+set(GLOO_MYELON_SHIM_SRCS
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../transport/myelon/binding.cc"
+  )
+
 set(
   MYELON_PLAYGROUND_ROOT
   "${CMAKE_CURRENT_SOURCE_DIR}/../../../../myelon-playground"
@@ -51,8 +55,14 @@ if(
   add_executable(mpi_bench_myelon_pingpong
     "${CMAKE_CURRENT_SOURCE_DIR}/myelon_pingpong.cc"
     ${GLOO_MPI_BENCH_COMMON_SRCS}
+    ${GLOO_MYELON_SHIM_SRCS}
     )
-  target_include_directories(mpi_bench_myelon_pingpong PRIVATE "${MYELON_GLOO_FFI_INCLUDE_DIR}")
+  target_include_directories(
+    mpi_bench_myelon_pingpong
+    PRIVATE
+    "${PROJECT_SOURCE_DIR}"
+    "${MYELON_GLOO_FFI_INCLUDE_DIR}"
+    )
   target_link_libraries(mpi_bench_myelon_pingpong gloo "${MYELON_GLOO_FFI_LIB}")
   add_dependencies(mpi_bench_myelon_pingpong myelon_gloo_ffi_build)
 else()

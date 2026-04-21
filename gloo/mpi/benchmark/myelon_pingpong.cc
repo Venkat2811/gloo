@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include "myelon_gloo_ffi.h"
+#include "gloo/transport/myelon/binding.h"
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -22,34 +22,12 @@ namespace {
 
 constexpr size_t kRingDepth = 64;
 
-[[noreturn]] void throw_last_error(const std::string& action) {
-  const char* message = myelon_gloo_last_error_message();
-  throw std::runtime_error(
-      action + ": " + (message != nullptr ? std::string(message) : "unknown error"));
-}
-
-void check_status(int rc, const std::string& action) {
-  if (rc != 0) {
-    throw_last_error(action);
-  }
-}
-
 std::string make_segment_name(uint64_t seed, char suffix) {
   std::ostringstream oss;
   oss << "mg" << std::hex << std::nouppercase << std::setw(8) << std::setfill('0')
       << static_cast<uint32_t>(seed & 0xffffffffu) << suffix;
   return oss.str();
 }
-
-struct Handles {
-  myelon_gloo_producer_t* outbound_producer = nullptr;
-  myelon_gloo_consumer_t* inbound_consumer = nullptr;
-
-  ~Handles() {
-    myelon_gloo_producer_destroy(outbound_producer);
-    myelon_gloo_consumer_destroy(inbound_consumer);
-  }
-};
 
 void fill_pattern(std::vector<uint8_t>& buffer) {
   for (size_t i = 0; i < buffer.size(); i++) {
@@ -78,7 +56,7 @@ int run_benchmark(int argc, char** argv) {
     throw std::invalid_argument("unexpected MPI rank layout");
   }
 
-  const auto max_payload = myelon_gloo_max_payload_bytes();
+  const auto max_payload = gloo::transport::myelon::maxPayloadBytes();
   for (const auto bytes : options.sizes) {
     if (bytes > max_payload) {
       std::ostringstream oss;
@@ -102,10 +80,7 @@ int run_benchmark(int argc, char** argv) {
   std::vector<gloo::mpi_bench::BenchRow> rows;
   for (size_t index = 0; index < options.sizes.size(); index++) {
     const auto bytes = options.sizes[index];
-    const auto bucket_bytes = myelon_gloo_bucket_payload_bytes(bytes);
-    if (bucket_bytes == 0) {
-      throw_last_error("select payload bucket");
-    }
+    const auto bucket_bytes = gloo::transport::myelon::bucketPayloadBytes(bytes);
 
     const auto outbound_name =
         rank == initiator ? make_segment_name(seed ^ bytes ^ index, 'a')
@@ -114,20 +89,13 @@ int run_benchmark(int argc, char** argv) {
         rank == initiator ? make_segment_name(seed ^ bytes ^ index, 'b')
                           : make_segment_name(seed ^ bytes ^ index, 'a');
 
-    Handles handles;
-    handles.outbound_producer =
-        myelon_gloo_producer_create(outbound_name.c_str(), kRingDepth, bucket_bytes);
-    if (handles.outbound_producer == nullptr) {
-      throw_last_error("create outbound producer");
-    }
+    gloo::transport::myelon::Producer outbound_producer(
+        outbound_name, kRingDepth, bucket_bytes);
 
     MPI_Barrier(MPI_COMM_WORLD);
 
-    handles.inbound_consumer = myelon_gloo_consumer_attach(
-        inbound_name.c_str(), kRingDepth, bucket_bytes, consumer_id);
-    if (handles.inbound_consumer == nullptr) {
-      throw_last_error("attach inbound consumer");
-    }
+    gloo::transport::myelon::Consumer inbound_consumer(
+        inbound_name, kRingDepth, bucket_bytes, consumer_id);
 
     MPI_Barrier(MPI_COMM_WORLD);
 
@@ -139,29 +107,11 @@ int run_benchmark(int argc, char** argv) {
     MPI_Barrier(MPI_COMM_WORLD);
     for (int i = 0; i < options.warmup; i++) {
       if (rank == initiator) {
-        check_status(
-            myelon_gloo_producer_publish(
-                handles.outbound_producer, send_buffer.data(), send_buffer.size()),
-            "warmup publish outbound");
-        check_status(
-            myelon_gloo_consumer_receive_blocking(
-                handles.inbound_consumer,
-                recv_buffer.data(),
-                recv_buffer.size(),
-                &received_len),
-            "warmup receive inbound");
+        outbound_producer.publish(send_buffer.data(), send_buffer.size());
+        received_len = inbound_consumer.receiveBlocking(recv_buffer.data(), recv_buffer.size());
       } else {
-        check_status(
-            myelon_gloo_consumer_receive_blocking(
-                handles.inbound_consumer,
-                recv_buffer.data(),
-                recv_buffer.size(),
-                &received_len),
-            "warmup receive inbound");
-        check_status(
-            myelon_gloo_producer_publish(
-                handles.outbound_producer, recv_buffer.data(), received_len),
-            "warmup echo outbound");
+        received_len = inbound_consumer.receiveBlocking(recv_buffer.data(), recv_buffer.size());
+        outbound_producer.publish(recv_buffer.data(), received_len);
       }
     }
 
@@ -174,32 +124,14 @@ int run_benchmark(int argc, char** argv) {
     for (int i = 0; i < options.iterations; i++) {
       if (rank == initiator) {
         const auto start = std::chrono::steady_clock::now();
-        check_status(
-            myelon_gloo_producer_publish(
-                handles.outbound_producer, send_buffer.data(), send_buffer.size()),
-            "publish outbound");
-        check_status(
-            myelon_gloo_consumer_receive_blocking(
-                handles.inbound_consumer,
-                recv_buffer.data(),
-                recv_buffer.size(),
-                &received_len),
-            "receive inbound");
+        outbound_producer.publish(send_buffer.data(), send_buffer.size());
+        received_len = inbound_consumer.receiveBlocking(recv_buffer.data(), recv_buffer.size());
         const auto end = std::chrono::steady_clock::now();
         samples[i] =
             std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
       } else {
-        check_status(
-            myelon_gloo_consumer_receive_blocking(
-                handles.inbound_consumer,
-                recv_buffer.data(),
-                recv_buffer.size(),
-                &received_len),
-            "receive inbound");
-        check_status(
-            myelon_gloo_producer_publish(
-                handles.outbound_producer, recv_buffer.data(), received_len),
-            "echo outbound");
+        received_len = inbound_consumer.receiveBlocking(recv_buffer.data(), recv_buffer.size());
+        outbound_producer.publish(recv_buffer.data(), received_len);
       }
     }
 
@@ -224,8 +156,7 @@ int run_benchmark(int argc, char** argv) {
 
   if (rank == initiator) {
     std::cout << "\nmpi_bench_myelon_pingpong\n";
-    std::cout
-        << "  MPI-launched Myelon/disruptor SHM round-trip benchmark via C ABI\n";
+    std::cout << "  MPI-launched Myelon/disruptor SHM round-trip benchmark via C++ shim\n";
     std::cout << "  backend=myelon-shm, ranks=2, initiator=" << initiator
               << ", warmup=" << options.warmup
               << ", iterations=" << options.iterations
