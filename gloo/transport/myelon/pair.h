@@ -3,8 +3,10 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 
 #include "gloo/transport/myelon/address.h"
@@ -48,7 +50,26 @@ class Pair final : public ::gloo::transport::Pair {
       size_t nbytes) override;
 
  private:
-  static std::string makeSegmentName(const std::string& token, size_t bucketBytes);
+  struct ChannelKey {
+    uint64_t tag;
+    size_t bucketBytes;
+
+    bool operator==(const ChannelKey& other) const {
+      return tag == other.tag && bucketBytes == other.bucketBytes;
+    }
+  };
+
+  struct ChannelKeyHash {
+    size_t operator()(const ChannelKey& key) const {
+      return std::hash<uint64_t>{}(key.tag) ^
+          (std::hash<size_t>{}(key.bucketBytes) << 1);
+    }
+  };
+
+  static std::string makeSegmentName(
+      const std::string& token,
+      uint64_t tag,
+      size_t bucketBytes);
   static std::string makeConsumerId(int selfRank, int peerRank, size_t bucketBytes);
 
   struct RecvBucketState {
@@ -58,9 +79,11 @@ class Pair final : public ::gloo::transport::Pair {
     uint64_t nextSequenceToRun{0};
   };
 
-  Producer& getOrCreateProducer(size_t bucketBytes);
-  Consumer& getOrCreateConsumer(size_t bucketBytes);
-  std::shared_ptr<RecvBucketState> getOrCreateRecvBucketState(size_t bucketBytes);
+  Producer& getOrCreateProducer(uint64_t tag, size_t bucketBytes);
+  Consumer& getOrCreateConsumer(uint64_t tag, size_t bucketBytes);
+  std::shared_ptr<RecvBucketState> getOrCreateRecvBucketState(
+      uint64_t tag,
+      size_t bucketBytes);
   void ensureConnected() const;
 
   std::shared_ptr<Context> context_;
@@ -70,9 +93,10 @@ class Pair final : public ::gloo::transport::Pair {
   Address remoteAddress_;
   bool connected_{false};
   mutable std::mutex mutex_;
-  std::unordered_map<size_t, std::unique_ptr<Producer>> producers_;
-  std::unordered_map<size_t, std::unique_ptr<Consumer>> consumers_;
-  std::unordered_map<size_t, std::shared_ptr<RecvBucketState>> recvBucketStates_;
+  std::unordered_map<ChannelKey, std::unique_ptr<Producer>, ChannelKeyHash> producers_;
+  std::unordered_map<ChannelKey, std::unique_ptr<Consumer>, ChannelKeyHash> consumers_;
+  std::unordered_map<ChannelKey, std::shared_ptr<RecvBucketState>, ChannelKeyHash>
+      recvBucketStates_;
 };
 
 } // namespace myelon

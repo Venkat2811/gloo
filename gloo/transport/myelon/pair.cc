@@ -32,6 +32,35 @@ size_t effectiveSize(size_t nbytes) {
   return std::max<size_t>(1, nbytes);
 }
 
+std::string encodeBase36(uint64_t value, size_t width) {
+  static constexpr char kAlphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+  std::string out(width, '0');
+  for (size_t i = 0; i < width; i++) {
+    out[width - i - 1] = kAlphabet[value % 36];
+    value /= 36;
+  }
+  return out;
+}
+
+uint64_t fnv1a64(const std::string& token, uint64_t tag, size_t bucketBytes) {
+  uint64_t hash = 1469598103934665603ULL;
+  const auto mixByte = [&](uint8_t byte) {
+    hash ^= byte;
+    hash *= 1099511628211ULL;
+  };
+
+  for (const unsigned char ch : token) {
+    mixByte(ch);
+  }
+  for (size_t i = 0; i < sizeof(tag); i++) {
+    mixByte(static_cast<uint8_t>((tag >> (i * 8)) & 0xff));
+  }
+  for (size_t i = 0; i < sizeof(bucketBytes); i++) {
+    mixByte(static_cast<uint8_t>((bucketBytes >> (i * 8)) & 0xff));
+  }
+  return hash;
+}
+
 char bucketCode(size_t bucketBytes) {
   switch (bucketBytes) {
     case 64:
@@ -107,42 +136,42 @@ bool Pair::isConnected() {
 
 void Pair::send(
     ::gloo::transport::UnboundBuffer* buf,
-    uint64_t /*tag*/,
+    uint64_t tag,
     size_t offset,
     size_t nbytes) {
   ensureConnected();
   GLOO_ENFORCE_LE(offset + nbytes, buf->size, "send range exceeds buffer size");
   const auto bucket = bucketPayloadBytes(effectiveSize(nbytes));
   auto* ptr = static_cast<uint8_t*>(buf->ptr) + offset;
-  getOrCreateProducer(bucket).publish(ptr, nbytes);
+  getOrCreateProducer(tag, bucket).publish(ptr, nbytes);
   static_cast<myelon::UnboundBuffer*>(buf)->handleSendCompletion(rank_);
 }
 
 void Pair::recv(
     ::gloo::transport::UnboundBuffer* buf,
-    uint64_t /*tag*/,
+    uint64_t tag,
     size_t offset,
     size_t nbytes) {
   ensureConnected();
   GLOO_ENFORCE_LE(offset + nbytes, buf->size, "recv range exceeds buffer size");
   const auto bucket = bucketPayloadBytes(effectiveSize(nbytes));
-  (void)getOrCreateProducer(bucket);
+  (void)getOrCreateProducer(tag, bucket);
   auto* myelonBuf = static_cast<myelon::UnboundBuffer*>(buf);
   auto* ptr = static_cast<uint8_t*>(buf->ptr) + offset;
-  auto state = getOrCreateRecvBucketState(bucket);
+  auto state = getOrCreateRecvBucketState(tag, bucket);
   uint64_t sequence = 0;
   {
     std::lock_guard<std::mutex> lock(state->mutex);
     sequence = state->nextSequenceToAssign++;
   }
   std::thread(
-      [this, bucket, nbytes, ptr, myelonBuf, state, sequence] {
+      [this, tag, bucket, nbytes, ptr, myelonBuf, state, sequence] {
         try {
           {
             std::unique_lock<std::mutex> lock(state->mutex);
             state->cv.wait(lock, [&] { return state->nextSequenceToRun == sequence; });
           }
-          const auto received = getOrCreateConsumer(bucket).receiveBlocking(ptr, nbytes);
+          const auto received = getOrCreateConsumer(tag, bucket).receiveBlocking(ptr, nbytes);
           GLOO_ENFORCE_EQ(received, nbytes, "received byte count mismatch");
           myelonBuf->handleRecvCompletion(rank_);
         } catch (...) {
@@ -157,8 +186,12 @@ void Pair::recv(
       .detach();
 }
 
-std::string Pair::makeSegmentName(const std::string& token, size_t bucketBytes) {
-  return token + std::string(1, bucketCode(bucketBytes));
+std::string Pair::makeSegmentName(
+    const std::string& token,
+    uint64_t tag,
+    size_t bucketBytes) {
+  return "m" + std::string(1, bucketCode(bucketBytes)) +
+      encodeBase36(fnv1a64(token, tag, bucketBytes), 10);
 }
 
 std::string Pair::makeConsumerId(int selfRank, int peerRank, size_t bucketBytes) {
@@ -167,15 +200,16 @@ std::string Pair::makeConsumerId(int selfRank, int peerRank, size_t bucketBytes)
   return "c" + std::to_string(selfRank);
 }
 
-Producer& Pair::getOrCreateProducer(size_t bucketBytes) {
+Producer& Pair::getOrCreateProducer(uint64_t tag, size_t bucketBytes) {
   std::lock_guard<std::mutex> lock(mutex_);
-  auto it = producers_.find(bucketBytes);
+  const ChannelKey key{tag, bucketBytes};
+  auto it = producers_.find(key);
   if (it == producers_.end()) {
     it = producers_
              .emplace(
-                 bucketBytes,
+                 key,
                  std::make_unique<Producer>(
-                     makeSegmentName(localAddress_.token(), bucketBytes),
+                     makeSegmentName(localAddress_.token(), tag, bucketBytes),
                      64,
                      bucketBytes))
              .first;
@@ -183,21 +217,22 @@ Producer& Pair::getOrCreateProducer(size_t bucketBytes) {
   return *it->second;
 }
 
-Consumer& Pair::getOrCreateConsumer(size_t bucketBytes) {
+Consumer& Pair::getOrCreateConsumer(uint64_t tag, size_t bucketBytes) {
   const auto deadline = std::chrono::steady_clock::now() + timeout_;
   for (;;) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      auto it = consumers_.find(bucketBytes);
+      const ChannelKey key{tag, bucketBytes};
+      auto it = consumers_.find(key);
       if (it != consumers_.end()) {
         return *it->second;
       }
       try {
         it = consumers_
                  .emplace(
-                     bucketBytes,
+                     key,
                      std::make_unique<Consumer>(
-                         makeSegmentName(remoteAddress_.token(), bucketBytes),
+                         makeSegmentName(remoteAddress_.token(), tag, bucketBytes),
                          64,
                          bucketBytes,
                          makeConsumerId(context_->rank, rank_, bucketBytes)))
@@ -215,11 +250,14 @@ Consumer& Pair::getOrCreateConsumer(size_t bucketBytes) {
   }
 }
 
-std::shared_ptr<Pair::RecvBucketState> Pair::getOrCreateRecvBucketState(size_t bucketBytes) {
+std::shared_ptr<Pair::RecvBucketState> Pair::getOrCreateRecvBucketState(
+    uint64_t tag,
+    size_t bucketBytes) {
   std::lock_guard<std::mutex> lock(mutex_);
-  auto it = recvBucketStates_.find(bucketBytes);
+  const ChannelKey key{tag, bucketBytes};
+  auto it = recvBucketStates_.find(key);
   if (it == recvBucketStates_.end()) {
-    it = recvBucketStates_.emplace(bucketBytes, std::make_shared<RecvBucketState>()).first;
+    it = recvBucketStates_.emplace(key, std::make_shared<RecvBucketState>()).first;
   }
   return it->second;
 }

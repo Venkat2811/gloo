@@ -79,10 +79,11 @@ into the MPI benchmark binaries when `myelon-playground` is available.
 This backend currently targets the unbound-buffer path only and is intentionally narrow:
 
 - same-host peers only
-- lazy producer and consumer creation per payload bucket
+- lazy producer and consumer creation per `(tag, payload bucket)`
+- short hashed shared-memory segment names so Darwin/macOS name limits are respected
 - generic `mpi_bench_pingpong --transport=myelon` works
 - generic `mpi_bench_broadcast --transport=myelon` works
-- `mpi_bench_allreduce --transport=myelon` is not correct yet
+- generic `mpi_bench_allreduce --transport=myelon` now works for the retained ring benchmark sweep
 
 Example commands:
 
@@ -95,13 +96,21 @@ mpirun -n 2 ./build-mpi-uv/gloo/mpi/benchmark/mpi_bench_pingpong \
 
 mpirun -n 4 ./build-mpi-uv/gloo/mpi/benchmark/mpi_bench_broadcast \
   --transport=myelon \
-  --sizes=4,1KiB,256KiB \
-  --warmup=10 \
-  --iterations=50
+  --sizes=4,1KiB,256KiB,1MiB \
+  --warmup=20 \
+  --iterations=100
+
+mpirun -n 4 ./build-mpi-uv/gloo/mpi/benchmark/mpi_bench_allreduce \
+  --transport=myelon \
+  --sizes=4,1KiB,256KiB,1MiB \
+  --warmup=20 \
+  --iterations=100
 ```
 
-The current allreduce failure is expected from the backend's remaining limitations:
+Current retained limitations:
 
 - no bound-buffer implementation
-- no tag-aware multiplexing
-- no correctness proof yet for pipelined multi-recv ring traffic
+- benchmark-only build integration; the transport is not wired into the main Gloo build yet
+- no inter-node path
+- `recv(std::vector<int>)` still only supports exactly one source rank
+- the narrow prototype still pays a thread-per-recv cost, so it is functional before it is fully optimized
