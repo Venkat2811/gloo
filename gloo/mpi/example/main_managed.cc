@@ -9,23 +9,52 @@
 #include <cassert>
 #include <iostream>
 
-#include "gloo/allreduce_ring.h"
+#include "gloo/allreduce.h"
+#include "gloo/config.h"
+#include "gloo/math.h"
 #include "gloo/mpi/context.h"
+
+#if GLOO_HAVE_TRANSPORT_TCP
 #include "gloo/transport/tcp/device.h"
+#endif
+
+#if GLOO_HAVE_TRANSPORT_UV
+#include "gloo/transport/uv/device.h"
+#endif
+
+namespace {
+
+std::shared_ptr<gloo::transport::Device> createDevice() {
+#if GLOO_HAVE_TRANSPORT_TCP
+  return gloo::transport::tcp::CreateDevice("localhost");
+#elif GLOO_HAVE_TRANSPORT_UV
+  return gloo::transport::uv::CreateDevice("localhost");
+#else
+#error "MPI examples require either the TCP or UV transport."
+#endif
+}
+
+} // namespace
 
 int main(int /*argc*/, char** /*argv*/) {
-  // We'll use the TCP transport in this example
-  auto dev = gloo::transport::tcp::CreateDevice("localhost");
+  auto dev = createDevice();
 
   // Create Gloo context and delegate management of MPI_Init/MPI_Finalize
   auto context = gloo::mpi::Context::createManaged();
   context->connectFullMesh(dev);
 
-  // Create and run simple allreduce
-  int rank = context->rank;
-  gloo::AllreduceRing<int> allreduce(context, {&rank}, 1);
-  allreduce.run();
-  std::cout << "Result: " << rank << std::endl;
+  // Run a simple unbound-buffer allreduce so this example works with
+  // transports like UV that do not implement the legacy bound-buffer API.
+  int input = context->rank;
+  int output = 0;
+  gloo::AllreduceOptions opts(context);
+  opts.setInput(&input, 1);
+  opts.setOutput(&output, 1);
+  opts.setReduceFunction(
+      static_cast<void (*)(void*, const void*, const void*, size_t)>(
+          &gloo::sum<int>));
+  gloo::allreduce(opts);
+  std::cout << "Result: " << output << std::endl;
 
   return 0;
 }

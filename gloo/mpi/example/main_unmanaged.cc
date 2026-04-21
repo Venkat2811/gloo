@@ -10,9 +10,32 @@
 #include <iostream>
 #include <stdexcept>
 
-#include "gloo/allreduce_ring.h"
+#include "gloo/allreduce.h"
+#include "gloo/config.h"
+#include "gloo/math.h"
 #include "gloo/mpi/context.h"
+
+#if GLOO_HAVE_TRANSPORT_TCP
 #include "gloo/transport/tcp/device.h"
+#endif
+
+#if GLOO_HAVE_TRANSPORT_UV
+#include "gloo/transport/uv/device.h"
+#endif
+
+namespace {
+
+std::shared_ptr<gloo::transport::Device> createDevice() {
+#if GLOO_HAVE_TRANSPORT_TCP
+  return gloo::transport::tcp::CreateDevice("localhost");
+#elif GLOO_HAVE_TRANSPORT_UV
+  return gloo::transport::uv::CreateDevice("localhost");
+#else
+#error "MPI examples require either the TCP or UV transport."
+#endif
+}
+
+} // namespace
 
 int main(int argc, char** argv) {
   auto rv = MPI_Init(&argc, &argv);
@@ -20,8 +43,7 @@ int main(int argc, char** argv) {
     throw std::runtime_error("Failed to initialize MPI");
   }
 
-  // We'll use the TCP transport in this example
-  auto dev = gloo::transport::tcp::CreateDevice("localhost");
+  auto dev = createDevice();
 
   // Use inner scope to force destruction of context and algorithm
   {
@@ -29,11 +51,16 @@ int main(int argc, char** argv) {
     auto context = std::make_shared<gloo::mpi::Context>(MPI_COMM_WORLD);
     context->connectFullMesh(dev);
 
-    // Create and run simple allreduce
-    int rank = context->rank;
-    gloo::AllreduceRing<int> allreduce(context, {&rank}, 1);
-    allreduce.run();
-    std::cout << "Result: " << rank << std::endl;
+    int input = context->rank;
+    int output = 0;
+    gloo::AllreduceOptions opts(context);
+    opts.setInput(&input, 1);
+    opts.setOutput(&output, 1);
+    opts.setReduceFunction(
+        static_cast<void (*)(void*, const void*, const void*, size_t)>(
+            &gloo::sum<int>));
+    gloo::allreduce(opts);
+    std::cout << "Result: " << output << std::endl;
   }
 
   rv = MPI_Finalize();
