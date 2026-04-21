@@ -73,8 +73,8 @@ transport work can reuse the same RAII/error-translation layer.
 
 ## Generic Myelon transport probe
 
-There is now also a minimal local-only `gloo/transport/myelon` backend that is compiled
-into the MPI benchmark binaries when `myelon-playground` is available.
+There is now also a minimal local-only `gloo/transport/myelon` backend that can be built
+into `libgloo` with `USE_MYELON=ON`.
 
 This backend currently targets the unbound-buffer path only and is intentionally narrow:
 
@@ -88,6 +88,14 @@ This backend currently targets the unbound-buffer path only and is intentionally
 Example commands:
 
 ```bash
+cmake -S . -B build-mpi-uv \
+  -DUSE_MPI=ON \
+  -DUSE_LIBUV=ON \
+  -DUSE_MYELON=ON \
+  -DBUILD_BENCHMARK=ON \
+  -DMYELON_PLAYGROUND_ROOT=/path/to/myelon-playground
+cmake --build build-mpi-uv -j8 --target gloo mpi_bench_pingpong mpi_bench_broadcast mpi_bench_allreduce
+
 mpirun -n 2 ./build-mpi-uv/gloo/mpi/benchmark/mpi_bench_pingpong \
   --transport=myelon \
   --sizes=4,64,1KiB,16KiB,256KiB,1MiB \
@@ -110,7 +118,6 @@ mpirun -n 4 ./build-mpi-uv/gloo/mpi/benchmark/mpi_bench_allreduce \
 Current retained limitations:
 
 - no bound-buffer implementation
-- benchmark-only build integration; the transport is not wired into the main Gloo build yet
 - no inter-node path
 - `recv(std::vector<int>)` still only supports exactly one source rank
 - the narrow prototype still pays a thread-per-recv cost, so it is functional before it is fully optimized

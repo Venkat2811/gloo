@@ -24,7 +24,7 @@
 #include "gloo/transport/uv/device.h"
 #endif
 
-#ifdef GLOO_MPI_BENCH_HAVE_MYELON
+#if GLOO_HAVE_TRANSPORT_MYELON
 #include "gloo/transport/myelon/device.h"
 #endif
 
@@ -130,7 +130,7 @@ std::vector<size_t> buildSizeSweep(const BenchOptions& options) {
 }
 
 std::shared_ptr<transport::Device> createDevice(const BenchOptions& options) {
-#ifdef GLOO_MPI_BENCH_HAVE_MYELON
+#if GLOO_HAVE_TRANSPORT_MYELON
   if (options.transport == "myelon") {
     transport::myelon::attr attr;
     return transport::myelon::CreateDevice(attr);
@@ -249,7 +249,7 @@ BenchOptions parseBenchOptions(int argc, char** argv, const char* benchName) {
   }
   if (options.transport != "auto" && options.transport != "tcp" &&
       options.transport != "uv"
-#ifdef GLOO_MPI_BENCH_HAVE_MYELON
+#if GLOO_HAVE_TRANSPORT_MYELON
       && options.transport != "myelon"
 #endif
       ) {

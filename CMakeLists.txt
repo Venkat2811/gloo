@@ -26,6 +26,7 @@ set(USE_IBVERBS_DEFAULT OFF)
 set(USE_NCCL_DEFAULT OFF)
 set(USE_RCCL_DEFAULT OFF)
 set(USE_LIBUV_DEFAULT OFF)
+set(USE_MYELON_DEFAULT OFF)
 set(USE_TCP_OPENSSL_LINK_DEFAULT OFF)
 set(USE_TCP_OPENSSL_LOAD_DEFAULT OFF)
 
@@ -35,6 +36,7 @@ option(USE_IBVERBS "Support ibverbs transport" ${USE_IBVERBS_DEFAULT})
 option(USE_NCCL "Support using NCCL for local collectives" ${USE_NCCL_DEFAULT})
 option(USE_RCCL "Support using RCCL for local collectives" ${USE_RCCL_DEFAULT})
 option(USE_LIBUV "Build libuv transport" ${USE_LIBUV_DEFAULT})
+option(USE_MYELON "Build the local Myelon SHM transport" ${USE_MYELON_DEFAULT})
 option(USE_TCP_OPENSSL_LINK "Build TCP-TLS transport with dynamically linked OpenSSL (Linux only)" ${USE_TCP_OPENSSL_LINK_DEFAULT})
 option(USE_TCP_OPENSSL_LOAD "Build TCP-TLS transport with OpenSSL dynamically loaded during runtime (Linux only)" ${USE_TCP_OPENSSL_LOAD_DEFAULT})
 if(${USE_TCP_OPENSSL_LINK} AND ${USE_TCP_OPENSSL_LOAD})
@@ -44,6 +46,13 @@ option(USE_CUDA "Build with CUDA support" OFF)
 option(GLOO_USE_CUDA_TOOLKIT "Build CUDA with FindCUDATookit.cmake and enable_language(CUDA)" OFF)
 option(GLOO_USE_TORCH_DTYPES "Build CUDA kernels with pytorch dtypes" 0)
 option(USE_ROCM "Build with ROCm support" OFF)
+
+set(
+  MYELON_PLAYGROUND_ROOT
+  "${PROJECT_SOURCE_DIR}/../myelon-playground"
+  CACHE PATH
+  "Path to a myelon-playground checkout that contains crates/myelon-gloo-ffi"
+  )
 
 if(MSVC)
   message(STATUS "MSVC detected")

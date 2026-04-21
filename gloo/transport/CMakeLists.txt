@@ -29,6 +29,26 @@ if(GLOO_HAVE_TRANSPORT_UV)
   add_subdirectory(uv)
 endif()
 
+if(GLOO_HAVE_TRANSPORT_MYELON)
+  list(APPEND GLOO_TRANSPORT_SRCS
+    "${CMAKE_CURRENT_SOURCE_DIR}/myelon/address.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/myelon/binding.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/myelon/context.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/myelon/device.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/myelon/pair.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/myelon/unbound_buffer.cc"
+    )
+
+  list(APPEND GLOO_TRANSPORT_HDRS
+    "${CMAKE_CURRENT_SOURCE_DIR}/myelon/address.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/myelon/binding.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/myelon/context.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/myelon/device.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/myelon/pair.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/myelon/unbound_buffer.h"
+    )
+endif()
+
 list(APPEND GLOO_SRCS ${GLOO_TRANSPORT_SRCS})
 list(APPEND GLOO_HDRS ${GLOO_TRANSPORT_HDRS})
 set(GLOO_SRCS ${GLOO_SRCS} PARENT_SCOPE)

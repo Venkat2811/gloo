@@ -101,6 +101,32 @@ else()
   set(GLOO_HAVE_TRANSPORT_UV 0)
 endif()
 
+if(USE_MYELON)
+  set(MYELON_GLOO_FFI_INCLUDE_DIR "${MYELON_PLAYGROUND_ROOT}/crates/myelon-gloo-ffi/include")
+  set(MYELON_GLOO_FFI_LIB "${MYELON_PLAYGROUND_ROOT}/target/release/libmyelon_gloo_ffi.a")
+  if(
+    NOT EXISTS "${MYELON_PLAYGROUND_ROOT}/Cargo.toml"
+    OR NOT EXISTS "${MYELON_GLOO_FFI_INCLUDE_DIR}/myelon_gloo_ffi.h"
+    )
+    message(
+      FATAL_ERROR
+      "USE_MYELON=ON requires MYELON_PLAYGROUND_ROOT to point at a myelon-playground checkout containing crates/myelon-gloo-ffi"
+      )
+  endif()
+  find_program(CARGO_EXECUTABLE cargo REQUIRED)
+  add_custom_command(
+    OUTPUT "${MYELON_GLOO_FFI_LIB}"
+    COMMAND "${CARGO_EXECUTABLE}" build -p myelon-gloo-ffi --release
+    WORKING_DIRECTORY "${MYELON_PLAYGROUND_ROOT}"
+    COMMENT "Building myelon-gloo-ffi Rust bindings"
+    VERBATIM
+    )
+  add_custom_target(myelon_gloo_ffi_build DEPENDS "${MYELON_GLOO_FFI_LIB}")
+  set(GLOO_HAVE_TRANSPORT_MYELON 1)
+else()
+  set(GLOO_HAVE_TRANSPORT_MYELON 0)
+endif()
+
 add_subdirectory(common)
 add_subdirectory(mpi)
 if(USE_CUDA AND USE_NCCL)
@@ -136,6 +162,7 @@ set(GLOO_USE_IBVERBS ${USE_IBVERBS})
 set(GLOO_USE_MPI ${USE_MPI})
 set(GLOO_USE_AVX ${USE_AVX})
 set(GLOO_USE_LIBUV ${USE_LIBUV})
+set(GLOO_USE_MYELON ${USE_MYELON})
 configure_file(config.h.in config.h)
 
 add_library(gloo ${GLOO_STATIC_OR_SHARED} ${GLOO_SRCS})
@@ -154,6 +181,11 @@ if(USE_ROCM)
 endif()
 if(USE_LIBUV)
   target_link_libraries(gloo PRIVATE uv_a)
+endif()
+if(USE_MYELON)
+  add_dependencies(gloo myelon_gloo_ffi_build)
+  target_include_directories(gloo PRIVATE "${MYELON_GLOO_FFI_INCLUDE_DIR}")
+  target_link_libraries(gloo PRIVATE "${MYELON_GLOO_FFI_LIB}")
 endif()
 if(USE_TCP_OPENSSL_LINK)
   target_compile_definitions(gloo PRIVATE USE_TCP_OPENSSL_LINK)
