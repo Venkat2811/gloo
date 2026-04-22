@@ -85,10 +85,12 @@ class Pair final : public ::gloo::transport::Pair {
       uint64_t tag,
       size_t bucketBytes);
   void ensureConnected() const;
+  size_t ringDepth() const;
 
   std::shared_ptr<Context> context_;
   const int rank_;
   const std::chrono::milliseconds timeout_;
+  const size_t ringDepth_;
   Address localAddress_;
   Address remoteAddress_;
   bool connected_{false};

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <string>
 #include <thread>
@@ -19,17 +20,29 @@ namespace myelon {
 
 namespace {
 
-constexpr std::array<size_t, 6> kBucketSizes = {
-    64,
-    size_t{1} << 10,
-    size_t{4} << 10,
-    size_t{64} << 10,
-    size_t{256} << 10,
-    size_t{1} << 20,
-};
+constexpr size_t kDefaultRingDepth = 64;
+constexpr const char* kRingDepthEnvVar = "GLOO_MYELON_RING_DEPTH";
 
 size_t effectiveSize(size_t nbytes) {
   return std::max<size_t>(1, nbytes);
+}
+
+size_t loadRingDepthFromEnv() {
+  const char* value = std::getenv(kRingDepthEnvVar);
+  if (value == nullptr || value[0] == '\0') {
+    return kDefaultRingDepth;
+  }
+
+  char* end = nullptr;
+  const auto parsed = std::strtoull(value, &end, 10);
+  GLOO_ENFORCE(
+      end != value && *end == '\0',
+      "invalid value for ",
+      kRingDepthEnvVar,
+      ": ",
+      value);
+  GLOO_ENFORCE_GT(parsed, 0, kRingDepthEnvVar, " must be greater than zero");
+  return static_cast<size_t>(parsed);
 }
 
 std::string encodeBase36(uint64_t value, size_t width) {
@@ -86,6 +99,7 @@ Pair::Pair(std::shared_ptr<Context> context, int rank, std::chrono::milliseconds
     : context_(std::move(context)),
       rank_(rank),
       timeout_(timeout),
+      ringDepth_(loadRingDepthFromEnv()),
       localAddress_(context_->device()->nextAddress()) {}
 
 Pair::~Pair() = default;
@@ -155,7 +169,6 @@ void Pair::recv(
   ensureConnected();
   GLOO_ENFORCE_LE(offset + nbytes, buf->size, "recv range exceeds buffer size");
   const auto bucket = bucketPayloadBytes(effectiveSize(nbytes));
-  (void)getOrCreateProducer(tag, bucket);
   auto* myelonBuf = static_cast<myelon::UnboundBuffer*>(buf);
   auto* ptr = static_cast<uint8_t*>(buf->ptr) + offset;
   auto state = getOrCreateRecvBucketState(tag, bucket);
@@ -210,7 +223,7 @@ Producer& Pair::getOrCreateProducer(uint64_t tag, size_t bucketBytes) {
                  key,
                  std::make_unique<Producer>(
                      makeSegmentName(localAddress_.token(), tag, bucketBytes),
-                     64,
+                     ringDepth(),
                      bucketBytes))
              .first;
   }
@@ -219,6 +232,7 @@ Producer& Pair::getOrCreateProducer(uint64_t tag, size_t bucketBytes) {
 
 Consumer& Pair::getOrCreateConsumer(uint64_t tag, size_t bucketBytes) {
   const auto deadline = std::chrono::steady_clock::now() + timeout_;
+  size_t spinCount = 0;
   for (;;) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -233,7 +247,7 @@ Consumer& Pair::getOrCreateConsumer(uint64_t tag, size_t bucketBytes) {
                      key,
                      std::make_unique<Consumer>(
                          makeSegmentName(remoteAddress_.token(), tag, bucketBytes),
-                         64,
+                         ringDepth(),
                          bucketBytes,
                          makeConsumerId(context_->rank, rank_, bucketBytes)))
                  .first;
@@ -246,7 +260,12 @@ Consumer& Pair::getOrCreateConsumer(uint64_t tag, size_t bucketBytes) {
       GLOO_THROW_IO_EXCEPTION(
           "timed out attaching Myelon consumer for bucket ", bucketBytes);
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    if (spinCount < 1000) {
+      ++spinCount;
+      std::this_thread::yield();
+    } else {
+      std::this_thread::sleep_for(std::chrono::microseconds(50));
+    }
   }
 }
 
@@ -265,6 +284,10 @@ std::shared_ptr<Pair::RecvBucketState> Pair::getOrCreateRecvBucketState(
 void Pair::ensureConnected() const {
   std::lock_guard<std::mutex> lock(mutex_);
   GLOO_ENFORCE(connected_, "pair must be connected before use");
+}
+
+size_t Pair::ringDepth() const {
+  return ringDepth_;
 }
 
 } // namespace myelon
