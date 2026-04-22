@@ -1,12 +1,13 @@
 #pragma once
 
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
-#include <functional>
+#include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 
 #include "gloo/transport/myelon/address.h"
@@ -19,6 +20,7 @@ namespace myelon {
 class Consumer;
 class Context;
 class Producer;
+class UnboundBuffer;
 
 class Pair final : public ::gloo::transport::Pair {
  public:
@@ -72,20 +74,19 @@ class Pair final : public ::gloo::transport::Pair {
       size_t bucketBytes);
   static std::string makeConsumerId(int selfRank, int peerRank, size_t bucketBytes);
 
-  struct RecvBucketState {
-    std::mutex mutex;
-    std::condition_variable cv;
-    uint64_t nextSequenceToAssign{0};
-    uint64_t nextSequenceToRun{0};
+  struct RecvRequest {
+    myelon::UnboundBuffer* myelonBuf;
+    uint64_t tag;
+    size_t bucketBytes;
+    size_t nbytes;
+    uint8_t* ptr;
   };
 
   Producer& getOrCreateProducer(uint64_t tag, size_t bucketBytes);
   Consumer& getOrCreateConsumer(uint64_t tag, size_t bucketBytes);
-  std::shared_ptr<RecvBucketState> getOrCreateRecvBucketState(
-      uint64_t tag,
-      size_t bucketBytes);
   void ensureConnected() const;
   size_t ringDepth() const;
+  void recvWorkerLoop();
 
   std::shared_ptr<Context> context_;
   const int rank_;
@@ -95,10 +96,12 @@ class Pair final : public ::gloo::transport::Pair {
   Address remoteAddress_;
   bool connected_{false};
   mutable std::mutex mutex_;
+  std::condition_variable recvQueueCv_;
+  std::deque<RecvRequest> recvQueue_;
+  bool stopRecvWorker_{false};
+  std::thread recvWorker_;
   std::unordered_map<ChannelKey, std::unique_ptr<Producer>, ChannelKeyHash> producers_;
   std::unordered_map<ChannelKey, std::unique_ptr<Consumer>, ChannelKeyHash> consumers_;
-  std::unordered_map<ChannelKey, std::shared_ptr<RecvBucketState>, ChannelKeyHash>
-      recvBucketStates_;
 };
 
 } // namespace myelon

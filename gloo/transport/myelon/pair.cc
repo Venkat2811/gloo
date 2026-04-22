@@ -100,9 +100,20 @@ Pair::Pair(std::shared_ptr<Context> context, int rank, std::chrono::milliseconds
       rank_(rank),
       timeout_(timeout),
       ringDepth_(loadRingDepthFromEnv()),
-      localAddress_(context_->device()->nextAddress()) {}
+      localAddress_(context_->device()->nextAddress()),
+      recvWorker_([this] { recvWorkerLoop(); }) {}
 
-Pair::~Pair() = default;
+Pair::~Pair() {
+  close();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stopRecvWorker_ = true;
+  }
+  recvQueueCv_.notify_all();
+  if (recvWorker_.joinable()) {
+    recvWorker_.join();
+  }
+}
 
 const Address& Pair::address() const {
   return localAddress_;
@@ -119,15 +130,14 @@ void Pair::connect(const std::vector<char>& bytes) {
   remoteAddress_ = remote;
   producers_.clear();
   consumers_.clear();
-  recvBucketStates_.clear();
   connected_ = true;
 }
 
 void Pair::close() {
   std::lock_guard<std::mutex> lock(mutex_);
+  recvQueue_.clear();
   consumers_.clear();
   producers_.clear();
-  recvBucketStates_.clear();
   connected_ = false;
 }
 
@@ -171,32 +181,11 @@ void Pair::recv(
   const auto bucket = bucketPayloadBytes(effectiveSize(nbytes));
   auto* myelonBuf = static_cast<myelon::UnboundBuffer*>(buf);
   auto* ptr = static_cast<uint8_t*>(buf->ptr) + offset;
-  auto state = getOrCreateRecvBucketState(tag, bucket);
-  uint64_t sequence = 0;
   {
-    std::lock_guard<std::mutex> lock(state->mutex);
-    sequence = state->nextSequenceToAssign++;
+    std::lock_guard<std::mutex> lock(mutex_);
+    recvQueue_.push_back(RecvRequest{myelonBuf, tag, bucket, nbytes, ptr});
   }
-  std::thread(
-      [this, tag, bucket, nbytes, ptr, myelonBuf, state, sequence] {
-        try {
-          {
-            std::unique_lock<std::mutex> lock(state->mutex);
-            state->cv.wait(lock, [&] { return state->nextSequenceToRun == sequence; });
-          }
-          const auto received = getOrCreateConsumer(tag, bucket).receiveBlocking(ptr, nbytes);
-          GLOO_ENFORCE_EQ(received, nbytes, "received byte count mismatch");
-          myelonBuf->handleRecvCompletion(rank_);
-        } catch (...) {
-          myelonBuf->handleRecvError(std::current_exception());
-        }
-        {
-          std::lock_guard<std::mutex> lock(state->mutex);
-          state->nextSequenceToRun++;
-        }
-        state->cv.notify_all();
-      })
-      .detach();
+  recvQueueCv_.notify_one();
 }
 
 std::string Pair::makeSegmentName(
@@ -269,18 +258,6 @@ Consumer& Pair::getOrCreateConsumer(uint64_t tag, size_t bucketBytes) {
   }
 }
 
-std::shared_ptr<Pair::RecvBucketState> Pair::getOrCreateRecvBucketState(
-    uint64_t tag,
-    size_t bucketBytes) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  const ChannelKey key{tag, bucketBytes};
-  auto it = recvBucketStates_.find(key);
-  if (it == recvBucketStates_.end()) {
-    it = recvBucketStates_.emplace(key, std::make_shared<RecvBucketState>()).first;
-  }
-  return it->second;
-}
-
 void Pair::ensureConnected() const {
   std::lock_guard<std::mutex> lock(mutex_);
   GLOO_ENFORCE(connected_, "pair must be connected before use");
@@ -288,6 +265,31 @@ void Pair::ensureConnected() const {
 
 size_t Pair::ringDepth() const {
   return ringDepth_;
+}
+
+void Pair::recvWorkerLoop() {
+  for (;;) {
+    RecvRequest request{};
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      recvQueueCv_.wait(lock, [&] { return stopRecvWorker_ || !recvQueue_.empty(); });
+      if (stopRecvWorker_ && recvQueue_.empty()) {
+        return;
+      }
+      request = recvQueue_.front();
+      recvQueue_.pop_front();
+    }
+
+    try {
+      const auto received =
+          getOrCreateConsumer(request.tag, request.bucketBytes)
+              .receiveBlocking(request.ptr, request.nbytes);
+      GLOO_ENFORCE_EQ(received, request.nbytes, "received byte count mismatch");
+      request.myelonBuf->handleRecvCompletion(rank_);
+    } catch (...) {
+      request.myelonBuf->handleRecvError(std::current_exception());
+    }
+  }
 }
 
 } // namespace myelon
